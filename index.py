@@ -6,13 +6,13 @@ from pyrogram import Client, filters
 from pyrogram.types import Message
 
 # ─────────────────────────────────────────────
-# CONFIG — Environment variables ആയി set ചെയ്യുക (Render dashboard-ൽ)
+# CONFIG
 # ─────────────────────────────────────────────
-API_ID = int(os.environ.get("API_ID", 0))          # my.telegram.org-ൽ നിന്ന്
-API_HASH = os.environ.get("API_HASH", "")          # my.telegram.org-ൽ നിന്ന്
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "")        # @BotFather-ൽ നിന്ന്
-TERABOX_COOKIE = os.environ.get("TERABOX_COOKIE", "")  # Browser-ൽ നിന്ന് copy ചെയ്തത്
-DOWNLOAD_DIR = "/tmp/downloads"                    # Render-ൽ /tmp use ചെയ്യുക
+API_ID = int(os.environ.get("API_ID", 0))
+API_HASH = os.environ.get("API_HASH", "")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
+TERABOX_COOKIE = os.environ.get("TERABOX_COOKIE", "")
+DOWNLOAD_DIR = "/tmp/downloads"
 # ─────────────────────────────────────────────
 
 logging.basicConfig(level=logging.INFO)
@@ -34,16 +34,16 @@ HEADERS = {
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/120.0.0.0 Safari/537.36"
     ),
-    "Referer": "https://www.terabox.com/",
+    "Referer": "https://www.1024terabox.com/",
 }
 
 
-def extract_share_id(url: str) -> str | None:
+def extract_surl(url: str) -> str | None:
     patterns = [
         r"terabox\.com/s/([A-Za-z0-9_-]+)",
-        r"terabox\.com/sharing/link\?surl=([A-Za-z0-9_-]+)",
         r"1024terabox\.com/s/([A-Za-z0-9_-]+)",
         r"freeterabox\.com/s/([A-Za-z0-9_-]+)",
+        r"[?&]surl=([A-Za-z0-9_-]+)",
     ]
     for p in patterns:
         m = re.search(p, url)
@@ -52,24 +52,82 @@ def extract_share_id(url: str) -> str | None:
     return None
 
 
-def get_file_info(share_id: str) -> dict | None:
-    api_url = f"https://www.terabox.com/api/shorturlinfo?shorturl={share_id}"
+def get_share_info(surl: str) -> dict | None:
+    """Step 1: surl → shareid, uk, randsk, sign, timestamp"""
+    api = f"https://www.1024terabox.com/api/shorturlinfo?shorturl={surl}&root=1"
     try:
-        resp = requests.get(api_url, headers=HEADERS, timeout=15)
+        resp = requests.get(api, headers=HEADERS, timeout=15)
         data = resp.json()
-        if data.get("errno") != 0:
-            logger.error("Terabox error: %s", data)
-            return None
+        logger.info("shorturlinfo errno=%s", data.get("errno"))
+        # errno -3 ആണെങ്കിലും shareid, uk കിട്ടും — അത് use ചെയ്യാം
         return data
     except Exception as e:
-        logger.error("API error: %s", e)
+        logger.error("shorturlinfo failed: %s", e)
+        return None
+
+
+def get_file_list(shareid: str, uk: str, randsk: str) -> list | None:
+    """Step 2: shareid + uk → file list"""
+    api = "https://www.1024terabox.com/share/list"
+    params = {
+        "app_id": "250528",
+        "web": "1",
+        "root": "1",
+        "shareid": shareid,
+        "uk": uk,
+        "dir": "/",
+        "order": "name",
+        "desc": "0",
+        "showempty": "0",
+        "page": "1",
+        "num": "20",
+        "randsk": randsk,
+    }
+    try:
+        resp = requests.get(api, headers=HEADERS, params=params, timeout=15)
+        data = resp.json()
+        logger.info("filelist errno=%s", data.get("errno"))
+        if data.get("errno") != 0:
+            logger.error("filelist error: %s", data)
+            return None
+        return data.get("list", [])
+    except Exception as e:
+        logger.error("filelist failed: %s", e)
+        return None
+
+
+def get_dlink(fs_id: str, shareid: str, uk: str, randsk: str, sign: str, timestamp: str) -> str | None:
+    """Step 3: fs_id → download link"""
+    api = "https://www.1024terabox.com/api/download"
+    params = {
+        "app_id": "250528",
+        "web": "1",
+        "shareid": shareid,
+        "uk": uk,
+        "randsk": randsk,
+        "sign": sign,
+        "timestamp": timestamp,
+        "fid_list": f"[{fs_id}]",
+    }
+    try:
+        resp = requests.get(api, headers=HEADERS, params=params, timeout=15)
+        data = resp.json()
+        logger.info("dlink errno=%s", data.get("errno"))
+        if data.get("errno") != 0:
+            logger.error("dlink error: %s", data)
+            return None
+        return data["dlink"][0]["dlink"]
+    except Exception as e:
+        logger.error("dlink failed: %s", e)
         return None
 
 
 def download_file(dlink: str, filename: str) -> str | None:
     save_path = os.path.join(DOWNLOAD_DIR, filename)
     try:
-        with requests.get(dlink, headers=HEADERS, stream=True, timeout=120) as r:
+        with requests.get(
+            dlink, headers=HEADERS, stream=True, timeout=120, allow_redirects=True
+        ) as r:
             r.raise_for_status()
             with open(save_path, "wb") as f:
                 for chunk in r.iter_content(chunk_size=2 * 1024 * 1024):
@@ -77,21 +135,20 @@ def download_file(dlink: str, filename: str) -> str | None:
                         f.write(chunk)
         return save_path
     except Exception as e:
-        logger.error("Download error: %s", e)
+        logger.error("Download failed: %s", e)
         return None
 
 
-# ─── Handlers ────────────────────────────────
+# ─── Telegram Handlers ────────────────────────
 
 @app.on_message(filters.command("start"))
 async def start(client: Client, message: Message):
     await message.reply(
         "**👋 Terabox Downloader Bot**\n\n"
         "Terabox link അയക്കൂ, ഞാൻ download ചെയ്ത് തരാം!\n\n"
-        "**Supported links:**\n"
+        "**Supported:**\n"
         "• terabox.com/s/...\n"
-        "• 1024terabox.com/s/...\n"
-        "• freeterabox.com/s/..."
+        "• 1024terabox.com/s/..."
     )
 
 
@@ -103,47 +160,66 @@ async def handle_link(client: Client, message: Message):
         await message.reply("❌ Valid Terabox link അയക്കൂ.")
         return
 
-    share_id = extract_share_id(url)
-    if not share_id:
-        await message.reply("❌ Link-ൽ നിന്ന് Share ID കിട്ടിയില്ല.")
+    surl = extract_surl(url)
+    if not surl:
+        await message.reply("❌ Link-ൽ നിന്ന് ID കിട്ടിയില്ല.")
         return
 
     status = await message.reply("⏳ **File info നേടുന്നു...**")
 
-    info = get_file_info(share_id)
+    # Step 1
+    info = get_share_info(surl)
     if not info:
+        await status.edit("❌ Share info കിട്ടിയില്ല.")
+        return
+
+    shareid = str(info.get("shareid", ""))
+    uk = str(info.get("uk", ""))
+    randsk = info.get("randsk", "")
+    sign = info.get("sign", "")
+    timestamp = str(info.get("timestamp", ""))
+
+    if not shareid or shareid == "0" or not uk:
+        await status.edit("❌ Invalid share link.")
+        return
+
+    # Step 2
+    await status.edit("⏳ **File list നേടുന്നു...**")
+    files = get_file_list(shareid, uk, randsk)
+    if not files:
         await status.edit(
-            "❌ **Error!**\nTerabox-ൽ നിന്ന് info കിട്ടിയില്ല.\n"
-            "Cookie expire ആയിട്ടുണ്ടാകും."
+            "❌ File list കിട്ടിയില്ല.\n"
+            "Cookie expire ആയിട്ടുണ്ടാകും, update ചെയ്യൂ."
         )
         return
 
-    try:
-        file_info = info["list"][0]
-        filename = file_info["server_filename"]
-        dlink = file_info["dlink"]
-        size_bytes = int(file_info.get("size", 0))
-        size_mb = round(size_bytes / (1024 * 1024), 2)
-    except (KeyError, IndexError) as e:
-        await status.edit(f"❌ Parse error: {e}")
-        return
+    file = files[0]
+    filename = file.get("server_filename", "file")
+    fs_id = str(file.get("fs_id", ""))
+    size_bytes = int(file.get("size", 0))
+    size_mb = round(size_bytes / (1024 * 1024), 2)
 
     await status.edit(
         f"📁 **{filename}**\n"
         f"📦 Size: `{size_mb} MB`\n\n"
-        f"⬇️ Downloading..."
+        f"⬇️ Download link നേടുന്നു..."
     )
 
-    # 2GB limit (Pyrogram bot limit)
-    if size_bytes > 2 * 1024 * 1024 * 1024:
-        await status.edit(
-            f"⚠️ File size ({size_mb} MB) 2GB limit കവിഞ്ഞു."
-        )
+    # Step 3
+    dlink = get_dlink(fs_id, shareid, uk, randsk, sign, timestamp)
+    if not dlink:
+        await status.edit("❌ Download link കിട്ടിയില്ല.")
         return
+
+    if size_bytes > 2 * 1024 * 1024 * 1024:
+        await status.edit(f"⚠️ File size ({size_mb} MB) 2GB limit കവിഞ്ഞു.")
+        return
+
+    await status.edit(f"⬇️ **Downloading** `{filename}`...")
 
     local_path = download_file(dlink, filename)
     if not local_path:
-        await status.edit("❌ Download failed. പിന്നീട് try ചെയ്യൂ.")
+        await status.edit("❌ Download failed.")
         return
 
     await status.edit("📤 **Uploading to Telegram...**")
@@ -165,7 +241,7 @@ async def handle_link(client: Client, message: Message):
 
 async def upload_progress(current, total, status_msg):
     percent = round((current / total) * 100)
-    if percent % 20 == 0:  # 20% step-ൽ update
+    if percent % 25 == 0:
         try:
             await status_msg.edit(f"📤 Uploading... `{percent}%`")
         except Exception:
@@ -175,5 +251,5 @@ async def upload_progress(current, total, status_msg):
 # ─── Run ─────────────────────────────────────
 
 if __name__ == "__main__":
-    logger.info("Bot starting with Pyrogram...")
+    logger.info("Bot starting...")
     app.run()
