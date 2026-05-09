@@ -208,6 +208,8 @@ async def handle_link(client: Client, message: Message):
     shareid = str(info.get("shareid", ""))
     uk = str(info.get("uk", ""))
     randsk = info.get("randsk", "")
+    sign = info.get("sign", "")
+    timestamp = str(info.get("timestamp", ""))
 
     if not shareid or shareid == "0" or not uk:
         await safe_edit(status, "❌ Invalid share link.")
@@ -224,9 +226,6 @@ async def handle_link(client: Client, message: Message):
     if not files:
         await safe_edit(status, "❌ Folder empty ആണ്.")
         return
-
-    sign = filelist_data.get("sign", "")
-    timestamp = str(filelist_data.get("timestamp", ""))
 
     file = files[0]
     filename = file.get("server_filename", "file")
