@@ -127,6 +127,8 @@ def get_file_list(shareid: str, uk: str, randsk: str) -> dict | None:
     }
     data = try_request("/share/list", params)
     if data and data.get("errno") == 0:
+        logger.info("filelist keys: %s", list(data.keys()))
+        logger.info("filelist sign=%s timestamp=%s", data.get("sign"), data.get("timestamp"))
         return data
     logger.error("filelist error: %s", data)
     return None
