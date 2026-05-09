@@ -212,6 +212,7 @@ async def handle_link(client: Client, message: Message):
     randsk = info.get("randsk", "")
     sign = info.get("sign", "")
     timestamp = str(info.get("timestamp", ""))
+    logger.info("shorturlinfo sign=%s timestamp=%s", sign, timestamp)
 
     if not shareid or shareid == "0" or not uk:
         await safe_edit(status, "❌ Invalid share link.")
