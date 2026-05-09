@@ -41,22 +41,20 @@ HEADERS = {
 
 
 async def safe_reply(message, text):
-    """FloodWait handle ചെയ്ത് reply അയക്കുക"""
     while True:
         try:
             return await message.reply(text)
         except FloodWait as e:
-            logger.warning("FloodWait: waiting %s seconds", e.value)
+            logger.warning("FloodWait: %s seconds", e.value)
             await asyncio.sleep(e.value)
 
 
 async def safe_edit(message, text):
-    """FloodWait handle ചെയ്ത് message edit ചെയ്യുക"""
     while True:
         try:
             return await message.edit(text)
         except FloodWait as e:
-            logger.warning("FloodWait: waiting %s seconds", e.value)
+            logger.warning("FloodWait: %s seconds", e.value)
             await asyncio.sleep(e.value)
         except Exception:
             break
@@ -77,6 +75,7 @@ def extract_surl(url: str) -> str | None:
 
 
 def get_share_info(surl: str) -> dict | None:
+    """Step 1: surl → shareid, uk, randsk"""
     api = f"https://www.1024terabox.com/api/shorturlinfo?shorturl={surl}&root=1"
     try:
         resp = requests.get(api, headers=HEADERS, timeout=15)
@@ -88,7 +87,8 @@ def get_share_info(surl: str) -> dict | None:
         return None
 
 
-def get_file_list(shareid: str, uk: str, randsk: str) -> list | None:
+def get_file_list(shareid: str, uk: str, randsk: str) -> dict | None:
+    """Step 2: file list + sign + timestamp return ചെയ്യുക"""
     api = "https://www.1024terabox.com/share/list"
     params = {
         "app_id": "250528",
@@ -111,13 +111,15 @@ def get_file_list(shareid: str, uk: str, randsk: str) -> list | None:
         if data.get("errno") != 0:
             logger.error("filelist error: %s", data)
             return None
-        return data.get("list", [])
+        # sign, timestamp ഇവിടെ നിന്ന് എടുക്കും
+        return data
     except Exception as e:
         logger.error("filelist failed: %s", e)
         return None
 
 
 def get_dlink(fs_id: str, shareid: str, uk: str, randsk: str, sign: str, timestamp: str) -> str | None:
+    """Step 3: actual download link"""
     api = "https://www.1024terabox.com/api/download"
     params = {
         "app_id": "250528",
@@ -188,7 +190,7 @@ async def handle_link(client: Client, message: Message):
 
     status = await safe_reply(message, "⏳ **File info നേടുന്നു...**")
 
-    # Step 1
+    # Step 1: share info
     info = get_share_info(surl)
     if not info:
         await safe_edit(status, "❌ Share info കിട്ടിയില്ല.")
@@ -197,19 +199,26 @@ async def handle_link(client: Client, message: Message):
     shareid = str(info.get("shareid", ""))
     uk = str(info.get("uk", ""))
     randsk = info.get("randsk", "")
-    sign = info.get("sign", "")
-    timestamp = str(info.get("timestamp", ""))
 
     if not shareid or shareid == "0" or not uk:
         await safe_edit(status, "❌ Invalid share link.")
         return
 
-    # Step 2
+    # Step 2: file list — sign, timestamp ഇവിടെ നിന്ന് എടുക്കുക
     await safe_edit(status, "⏳ **File list നേടുന്നു...**")
-    files = get_file_list(shareid, uk, randsk)
-    if not files:
+    filelist_data = get_file_list(shareid, uk, randsk)
+    if not filelist_data:
         await safe_edit(status, "❌ File list കിട്ടിയില്ല.\nCookie expire ആയിട്ടുണ്ടാകും.")
         return
+
+    files = filelist_data.get("list", [])
+    if not files:
+        await safe_edit(status, "❌ Folder empty ആണ്.")
+        return
+
+    # ⚠️ sign, timestamp — filelist response-ൽ നിന്ന് എടുക്കുക
+    sign = filelist_data.get("sign", "")
+    timestamp = str(filelist_data.get("timestamp", ""))
 
     file = files[0]
     filename = file.get("server_filename", "file")
@@ -224,7 +233,7 @@ async def handle_link(client: Client, message: Message):
         f"⬇️ Download link നേടുന്നു..."
     )
 
-    # Step 3
+    # Step 3: dlink
     dlink = get_dlink(fs_id, shareid, uk, randsk, sign, timestamp)
     if not dlink:
         await safe_edit(status, "❌ Download link കിട്ടിയില്ല.")
