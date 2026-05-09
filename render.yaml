@@ -1,0 +1,15 @@
+services:
+  - type: worker
+    name: terabox-bot
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python terabox_pyrogram_bot.py
+    envVars:
+      - key: API_ID
+        sync: false
+      - key: API_HASH
+        sync: false
+      - key: BOT_TOKEN
+        sync: false
+      - key: TERABOX_COOKIE
+        sync: false
