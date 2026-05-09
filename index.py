@@ -1,9 +1,11 @@
 import os
 import re
+import asyncio
 import logging
 import requests
 from pyrogram import Client, filters
 from pyrogram.types import Message
+from pyrogram.errors import FloodWait
 
 # ─────────────────────────────────────────────
 # CONFIG
@@ -38,6 +40,28 @@ HEADERS = {
 }
 
 
+async def safe_reply(message, text):
+    """FloodWait handle ചെയ്ത് reply അയക്കുക"""
+    while True:
+        try:
+            return await message.reply(text)
+        except FloodWait as e:
+            logger.warning("FloodWait: waiting %s seconds", e.value)
+            await asyncio.sleep(e.value)
+
+
+async def safe_edit(message, text):
+    """FloodWait handle ചെയ്ത് message edit ചെയ്യുക"""
+    while True:
+        try:
+            return await message.edit(text)
+        except FloodWait as e:
+            logger.warning("FloodWait: waiting %s seconds", e.value)
+            await asyncio.sleep(e.value)
+        except Exception:
+            break
+
+
 def extract_surl(url: str) -> str | None:
     patterns = [
         r"terabox\.com/s/([A-Za-z0-9_-]+)",
@@ -53,13 +77,11 @@ def extract_surl(url: str) -> str | None:
 
 
 def get_share_info(surl: str) -> dict | None:
-    """Step 1: surl → shareid, uk, randsk, sign, timestamp"""
     api = f"https://www.1024terabox.com/api/shorturlinfo?shorturl={surl}&root=1"
     try:
         resp = requests.get(api, headers=HEADERS, timeout=15)
         data = resp.json()
         logger.info("shorturlinfo errno=%s", data.get("errno"))
-        # errno -3 ആണെങ്കിലും shareid, uk കിട്ടും — അത് use ചെയ്യാം
         return data
     except Exception as e:
         logger.error("shorturlinfo failed: %s", e)
@@ -67,7 +89,6 @@ def get_share_info(surl: str) -> dict | None:
 
 
 def get_file_list(shareid: str, uk: str, randsk: str) -> list | None:
-    """Step 2: shareid + uk → file list"""
     api = "https://www.1024terabox.com/share/list"
     params = {
         "app_id": "250528",
@@ -97,7 +118,6 @@ def get_file_list(shareid: str, uk: str, randsk: str) -> list | None:
 
 
 def get_dlink(fs_id: str, shareid: str, uk: str, randsk: str, sign: str, timestamp: str) -> str | None:
-    """Step 3: fs_id → download link"""
     api = "https://www.1024terabox.com/api/download"
     params = {
         "app_id": "250528",
@@ -139,11 +159,12 @@ def download_file(dlink: str, filename: str) -> str | None:
         return None
 
 
-# ─── Telegram Handlers ────────────────────────
+# ─── Handlers ────────────────────────────────
 
 @app.on_message(filters.command("start"))
 async def start(client: Client, message: Message):
-    await message.reply(
+    await safe_reply(
+        message,
         "**👋 Terabox Downloader Bot**\n\n"
         "Terabox link അയക്കൂ, ഞാൻ download ചെയ്ത് തരാം!\n\n"
         "**Supported:**\n"
@@ -157,20 +178,20 @@ async def handle_link(client: Client, message: Message):
     url = message.text.strip()
 
     if "terabox" not in url.lower():
-        await message.reply("❌ Valid Terabox link അയക്കൂ.")
+        await safe_reply(message, "❌ Valid Terabox link അയക്കൂ.")
         return
 
     surl = extract_surl(url)
     if not surl:
-        await message.reply("❌ Link-ൽ നിന്ന് ID കിട്ടിയില്ല.")
+        await safe_reply(message, "❌ Link-ൽ നിന്ന് ID കിട്ടിയില്ല.")
         return
 
-    status = await message.reply("⏳ **File info നേടുന്നു...**")
+    status = await safe_reply(message, "⏳ **File info നേടുന്നു...**")
 
     # Step 1
     info = get_share_info(surl)
     if not info:
-        await status.edit("❌ Share info കിട്ടിയില്ല.")
+        await safe_edit(status, "❌ Share info കിട്ടിയില്ല.")
         return
 
     shareid = str(info.get("shareid", ""))
@@ -180,17 +201,14 @@ async def handle_link(client: Client, message: Message):
     timestamp = str(info.get("timestamp", ""))
 
     if not shareid or shareid == "0" or not uk:
-        await status.edit("❌ Invalid share link.")
+        await safe_edit(status, "❌ Invalid share link.")
         return
 
     # Step 2
-    await status.edit("⏳ **File list നേടുന്നു...**")
+    await safe_edit(status, "⏳ **File list നേടുന്നു...**")
     files = get_file_list(shareid, uk, randsk)
     if not files:
-        await status.edit(
-            "❌ File list കിട്ടിയില്ല.\n"
-            "Cookie expire ആയിട്ടുണ്ടാകും, update ചെയ്യൂ."
-        )
+        await safe_edit(status, "❌ File list കിട്ടിയില്ല.\nCookie expire ആയിട്ടുണ്ടാകും.")
         return
 
     file = files[0]
@@ -199,7 +217,8 @@ async def handle_link(client: Client, message: Message):
     size_bytes = int(file.get("size", 0))
     size_mb = round(size_bytes / (1024 * 1024), 2)
 
-    await status.edit(
+    await safe_edit(
+        status,
         f"📁 **{filename}**\n"
         f"📦 Size: `{size_mb} MB`\n\n"
         f"⬇️ Download link നേടുന്നു..."
@@ -208,21 +227,21 @@ async def handle_link(client: Client, message: Message):
     # Step 3
     dlink = get_dlink(fs_id, shareid, uk, randsk, sign, timestamp)
     if not dlink:
-        await status.edit("❌ Download link കിട്ടിയില്ല.")
+        await safe_edit(status, "❌ Download link കിട്ടിയില്ല.")
         return
 
     if size_bytes > 2 * 1024 * 1024 * 1024:
-        await status.edit(f"⚠️ File size ({size_mb} MB) 2GB limit കവിഞ്ഞു.")
+        await safe_edit(status, f"⚠️ File size ({size_mb} MB) 2GB limit കവിഞ്ഞു.")
         return
 
-    await status.edit(f"⬇️ **Downloading** `{filename}`...")
+    await safe_edit(status, f"⬇️ **Downloading** `{filename}`...")
 
     local_path = download_file(dlink, filename)
     if not local_path:
-        await status.edit("❌ Download failed.")
+        await safe_edit(status, "❌ Download failed.")
         return
 
-    await status.edit("📤 **Uploading to Telegram...**")
+    await safe_edit(status, "📤 **Uploading to Telegram...**")
 
     try:
         await message.reply_document(
@@ -232,8 +251,10 @@ async def handle_link(client: Client, message: Message):
             progress_args=(status,),
         )
         await status.delete()
+    except FloodWait as e:
+        await asyncio.sleep(e.value)
     except Exception as e:
-        await status.edit(f"❌ Upload failed: {e}")
+        await safe_edit(status, f"❌ Upload failed: {e}")
     finally:
         if os.path.exists(local_path):
             os.remove(local_path)
