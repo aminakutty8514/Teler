@@ -15,6 +15,24 @@ API_HASH = os.environ.get("API_HASH", "")
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 TERABOX_COOKIE = os.environ.get("TERABOX_COOKIE", "")
 DOWNLOAD_DIR = "/tmp/downloads"
+
+# Try ചെയ്യേണ്ട domains — ഒന്ന് fail ആയാൽ അടുത്തത്
+DOMAINS = [
+    "www.terabox.com",
+    "www.1024terabox.com",
+    "www.freeterabox.com",
+    "www.4funbox.com",
+    "www.mirrobox.com",
+    "www.nephobox.com",
+    "www.momerybox.com",
+    "www.tatabox.com",
+    "www.gibibox.com",
+    "www.playboxapp.com",
+    "www.teraboxapp.com",
+    "terasharelink.com",
+    "teraboxlink.com",
+    "terasharefile.com",
+]
 # ─────────────────────────────────────────────
 
 logging.basicConfig(level=logging.INFO)
@@ -36,7 +54,7 @@ HEADERS = {
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/120.0.0.0 Safari/537.36"
     ),
-    "Referer": "https://www.1024terabox.com/",
+    "Referer": "https://www.terabox.com/",
 }
 
 
@@ -45,7 +63,6 @@ async def safe_reply(message, text):
         try:
             return await message.reply(text)
         except FloodWait as e:
-            logger.warning("FloodWait: %s seconds", e.value)
             await asyncio.sleep(e.value)
 
 
@@ -54,7 +71,6 @@ async def safe_edit(message, text):
         try:
             return await message.edit(text)
         except FloodWait as e:
-            logger.warning("FloodWait: %s seconds", e.value)
             await asyncio.sleep(e.value)
         except Exception:
             break
@@ -63,8 +79,9 @@ async def safe_edit(message, text):
 def extract_surl(url: str) -> str | None:
     patterns = [
         r"terabox\.com/s/([A-Za-z0-9_-]+)",
-        r"1024terabox\.com/s/([A-Za-z0-9_-]+)",
-        r"freeterabox\.com/s/([A-Za-z0-9_-]+)",
+        r"terasharelink\.com/s/([A-Za-z0-9_-]+)",
+        r"teraboxlink\.com/s/([A-Za-z0-9_-]+)",
+        r"terasharefile\.com/s/([A-Za-z0-9_-]+)",
         r"[?&]surl=([A-Za-z0-9_-]+)",
     ]
     for p in patterns:
@@ -74,22 +91,26 @@ def extract_surl(url: str) -> str | None:
     return None
 
 
+def try_request(path: str, params: dict = None) -> dict | None:
+    """Multiple domains try ചെയ്ത് response return ചെയ്യുക"""
+    for domain in DOMAINS:
+        url = f"https://{domain}{path}"
+        try:
+            resp = requests.get(url, headers=HEADERS, params=params, timeout=20)
+            data = resp.json()
+            logger.info("✅ %s → errno=%s", domain, data.get("errno"))
+            return data
+        except Exception as e:
+            logger.warning("❌ %s failed: %s", domain, e)
+            continue
+    return None
+
+
 def get_share_info(surl: str) -> dict | None:
-    """Step 1: surl → shareid, uk, randsk"""
-    api = f"https://www.1024terabox.com/api/shorturlinfo?shorturl={surl}&root=1"
-    try:
-        resp = requests.get(api, headers=HEADERS, timeout=15)
-        data = resp.json()
-        logger.info("shorturlinfo errno=%s", data.get("errno"))
-        return data
-    except Exception as e:
-        logger.error("shorturlinfo failed: %s", e)
-        return None
+    return try_request("/api/shorturlinfo", {"shorturl": surl, "root": "1"})
 
 
 def get_file_list(shareid: str, uk: str, randsk: str) -> dict | None:
-    """Step 2: file list + sign + timestamp return ചെയ്യുക"""
-    api = "https://www.1024terabox.com/share/list"
     params = {
         "app_id": "250528",
         "web": "1",
@@ -104,23 +125,14 @@ def get_file_list(shareid: str, uk: str, randsk: str) -> dict | None:
         "num": "20",
         "randsk": randsk,
     }
-    try:
-        resp = requests.get(api, headers=HEADERS, params=params, timeout=15)
-        data = resp.json()
-        logger.info("filelist errno=%s", data.get("errno"))
-        if data.get("errno") != 0:
-            logger.error("filelist error: %s", data)
-            return None
-        # sign, timestamp ഇവിടെ നിന്ന് എടുക്കും
+    data = try_request("/share/list", params)
+    if data and data.get("errno") == 0:
         return data
-    except Exception as e:
-        logger.error("filelist failed: %s", e)
-        return None
+    logger.error("filelist error: %s", data)
+    return None
 
 
 def get_dlink(fs_id: str, shareid: str, uk: str, randsk: str, sign: str, timestamp: str) -> str | None:
-    """Step 3: actual download link"""
-    api = "https://www.1024terabox.com/api/download"
     params = {
         "app_id": "250528",
         "web": "1",
@@ -131,24 +143,18 @@ def get_dlink(fs_id: str, shareid: str, uk: str, randsk: str, sign: str, timesta
         "timestamp": timestamp,
         "fid_list": f"[{fs_id}]",
     }
-    try:
-        resp = requests.get(api, headers=HEADERS, params=params, timeout=15)
-        data = resp.json()
-        logger.info("dlink errno=%s", data.get("errno"))
-        if data.get("errno") != 0:
-            logger.error("dlink error: %s", data)
-            return None
+    data = try_request("/api/download", params)
+    if data and data.get("errno") == 0:
         return data["dlink"][0]["dlink"]
-    except Exception as e:
-        logger.error("dlink failed: %s", e)
-        return None
+    logger.error("dlink error: %s", data)
+    return None
 
 
 def download_file(dlink: str, filename: str) -> str | None:
     save_path = os.path.join(DOWNLOAD_DIR, filename)
     try:
         with requests.get(
-            dlink, headers=HEADERS, stream=True, timeout=120, allow_redirects=True
+            dlink, headers=HEADERS, stream=True, timeout=300, allow_redirects=True
         ) as r:
             r.raise_for_status()
             with open(save_path, "wb") as f:
@@ -171,7 +177,8 @@ async def start(client: Client, message: Message):
         "Terabox link അയക്കൂ, ഞാൻ download ചെയ്ത് തരാം!\n\n"
         "**Supported:**\n"
         "• terabox.com/s/...\n"
-        "• 1024terabox.com/s/..."
+        "• 1024terabox.com/s/...\n"
+        "• freeterabox.com/s/..."
     )
 
 
@@ -190,10 +197,10 @@ async def handle_link(client: Client, message: Message):
 
     status = await safe_reply(message, "⏳ **File info നേടുന്നു...**")
 
-    # Step 1: share info
+    # Step 1
     info = get_share_info(surl)
     if not info:
-        await safe_edit(status, "❌ Share info കിട്ടിയില്ല.")
+        await safe_edit(status, "❌ Terabox-ലേക്ക് connect ചെയ്യാൻ കഴിഞ്ഞില്ല.")
         return
 
     shareid = str(info.get("shareid", ""))
@@ -204,7 +211,7 @@ async def handle_link(client: Client, message: Message):
         await safe_edit(status, "❌ Invalid share link.")
         return
 
-    # Step 2: file list — sign, timestamp ഇവിടെ നിന്ന് എടുക്കുക
+    # Step 2
     await safe_edit(status, "⏳ **File list നേടുന്നു...**")
     filelist_data = get_file_list(shareid, uk, randsk)
     if not filelist_data:
@@ -216,7 +223,6 @@ async def handle_link(client: Client, message: Message):
         await safe_edit(status, "❌ Folder empty ആണ്.")
         return
 
-    # ⚠️ sign, timestamp — filelist response-ൽ നിന്ന് എടുക്കുക
     sign = filelist_data.get("sign", "")
     timestamp = str(filelist_data.get("timestamp", ""))
 
@@ -233,7 +239,7 @@ async def handle_link(client: Client, message: Message):
         f"⬇️ Download link നേടുന്നു..."
     )
 
-    # Step 3: dlink
+    # Step 3
     dlink = get_dlink(fs_id, shareid, uk, randsk, sign, timestamp)
     if not dlink:
         await safe_edit(status, "❌ Download link കിട്ടിയില്ല.")
