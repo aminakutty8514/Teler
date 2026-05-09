@@ -8,6 +8,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from pyrogram import Client, filters
 from pyrogram.types import Message
 from pyrogram.errors import FloodWait
+from urllib.parse import unquote
 
 # ─────────────────────────────────────────────
 # CONFIG
@@ -209,10 +210,10 @@ async def handle_link(client: Client, message: Message):
 
     shareid = str(info.get("shareid", ""))
     uk = str(info.get("uk", ""))
-    randsk = info.get("randsk", "")
+    randsk = unquote(info.get("randsk", ""))
     sign = info.get("sign", "")
     timestamp = str(info.get("timestamp", ""))
-    logger.info("shorturlinfo sign=%s timestamp=%s", sign, timestamp)
+    logger.info("shorturlinfo sign=%s timestamp=%s randsk=%s", sign, timestamp, randsk)
 
     if not shareid or shareid == "0" or not uk:
         await safe_edit(status, "❌ Invalid share link.")
