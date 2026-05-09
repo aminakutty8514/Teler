@@ -2,7 +2,9 @@ import os
 import re
 import asyncio
 import logging
+import threading
 import requests
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from pyrogram import Client, filters
 from pyrogram.types import Message
 from pyrogram.errors import FloodWait
@@ -285,8 +287,28 @@ async def upload_progress(current, total, status_msg):
             pass
 
 
+# ─── Dummy HTTP Server (Render port binding) ──
+
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is running!")
+
+    def log_message(self, format, *args):
+        pass  # HTTP logs suppress ചെയ്യുക
+
+
+def start_health_server():
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), HealthHandler)
+    logger.info("Health server started on port %s", port)
+    server.serve_forever()
+
+
 # ─── Run ─────────────────────────────────────
 
 if __name__ == "__main__":
     logger.info("Bot starting...")
+    threading.Thread(target=start_health_server, daemon=True).start()
     app.run()
