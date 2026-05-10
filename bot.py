@@ -1,4 +1,5 @@
 from pyrogram import Client, filters
+from pyrogram.errors import MessageNotModified
 import os, requests, re, threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
@@ -6,7 +7,6 @@ api_id = int(os.getenv("TELEGRAM_API_ID"))
 api_hash = os.getenv("TELEGRAM_API_HASH")
 bot_token = os.getenv("BOT_TOKEN")
 
-# Fake HTTP server for Render
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -48,11 +48,11 @@ def get_download_link(url):
         data = resp.json()
 
         if data.get("errno") != 0:
-            return None, f"Error: {data.get('errmsg', 'Unknown error')}"
+            return None, f"API Error {data.get('errno')}: {data.get('errmsg', 'Unknown error')}"
 
         file_list = data.get("list", [])
         if not file_list:
-            return None, "No files found"
+            return None, "No files found in this link"
 
         file = file_list[0]
         return {
@@ -62,7 +62,7 @@ def get_download_link(url):
         }, None
 
     except Exception as e:
-        return None, str(e)
+        return None, f"Exception: {str(e)}"
 
 def format_size(size):
     for unit in ["B", "KB", "MB", "GB"]:
@@ -71,28 +71,36 @@ def format_size(size):
         size /= 1024
     return f"{size:.1f} TB"
 
+def safe_edit(msg, text):
+    try:
+        msg.edit(text, disable_web_page_preview=True)
+    except MessageNotModified:
+        pass
+
 @app.on_message(filters.text)
 def handler(_, m):
-    if "terabox.com" in m.text.lower() or "terabox.app" in m.text.lower():
-        urls = re.findall(r'https?://[^\s]+terabox[^\s]+', m.text, re.IGNORECASE)
-        if not urls:
-            m.reply("❌ Valid TeraBox link കണ്ടെത്തിയില്ല.")
-            return
+    if "terabox.com" not in m.text.lower() and "terabox.app" not in m.text.lower():
+        return
 
-        msg = m.reply("⏳ Processing...")
+    urls = re.findall(r'https?://[^\s]+terabox[^\s]+', m.text, re.IGNORECASE)
+    if not urls:
+        m.reply("❌ Valid TeraBox link കണ്ടെത്തിയില്ല.")
+        return
 
-        info, error = get_download_link(urls[0])
+    msg = m.reply("⏳ Processing your TeraBox link...")
 
-        if error:
-            msg.edit(f"❌ Error: {error}")
-            return
+    info, error = get_download_link(urls[0])
 
-        text = (
-            f"📁 **{info['name']}**\n"
-            f"📦 Size: {format_size(info['size'])}\n\n"
-            f"⬇️ [Download Link]({info['dlink']})"
-        )
-        msg.edit(text, disable_web_page_preview=True)
+    if error:
+        safe_edit(msg, f"❌ Failed: {error}")
+        return
+
+    text = (
+        f"📁 **{info['name']}**\n"
+        f"📦 Size: {format_size(info['size'])}\n\n"
+        f"⬇️ [Download Link]({info['dlink']})"
+    )
+    safe_edit(msg, text)
 
 if __name__ == "__main__":
     app.run()
