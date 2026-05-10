@@ -1,7 +1,7 @@
-FROM python:3.12-slim
+RUN pip install playwright && 
 
-WORKDIR /app
+playwright install --with-deps chromium
 
-COPY requirements.txt .
+COPY . .
 
-RUN pip install --no-cache-dir -r requirements.txt
+CMD ["python", "bot.py"]
