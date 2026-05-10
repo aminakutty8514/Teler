@@ -1,6 +1,7 @@
-FROM python:3.11-slim
+FROM python:3.12-slim
+
 WORKDIR /app
-COPY . .
-RUN apt update && apt install -y chromium && rm -rf /var/lib/apt/lists/*
-RUN pip install -r requirements.txt && playwright install chromium
-CMD python playwright_login.py && python bot.py
+
+COPY requirements.txt .
+
+RUN pip install --no-cache-dir -r requirements.txt
