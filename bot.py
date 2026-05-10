@@ -1,18 +1,32 @@
 from pyrogram import Client, filters
-import os, requests, re
+import os, requests, re, threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
 api_id = int(os.getenv("TELEGRAM_API_ID"))
 api_hash = os.getenv("TELEGRAM_API_HASH")
 bot_token = os.getenv("BOT_TOKEN")
 
+# Fake HTTP server for Render
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is running!")
+    def log_message(self, *args):
+        pass
+
+def run_server():
+    server = HTTPServer(("0.0.0.0", 10000), Handler)
+    server.serve_forever()
+
+threading.Thread(target=run_server, daemon=True).start()
+
 app = Client("terabox_bot", api_id=api_id, api_hash=api_hash, bot_token=bot_token)
 
 def extract_terabox_id(url):
-    # surl parameter extract ചെയ്യുക
     match = re.search(r'surl=([^&]+)', url)
     if match:
         return match.group(1)
-    # /s/XXXX format
     match = re.search(r'/s/([a-zA-Z0-9_-]+)', url)
     if match:
         return match.group(1)
@@ -29,7 +43,6 @@ def get_download_link(url):
             "Referer": "https://www.terabox.com/",
         }
 
-        # Public API - login വേണ്ട
         api_url = f"https://terabox.com/api/shorturlinfo?app_id=250528&shorturl={surl}&root=1"
         resp = requests.get(api_url, headers=headers, timeout=15)
         data = resp.json()
@@ -61,7 +74,6 @@ def format_size(size):
 @app.on_message(filters.text)
 def handler(_, m):
     if "terabox.com" in m.text.lower() or "terabox.app" in m.text.lower():
-        # URL extract ചെയ്യുക
         urls = re.findall(r'https?://[^\s]+terabox[^\s]+', m.text, re.IGNORECASE)
         if not urls:
             m.reply("❌ Valid TeraBox link കണ്ടെത്തിയില്ല.")
